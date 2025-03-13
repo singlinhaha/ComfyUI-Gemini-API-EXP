@@ -25,23 +25,21 @@
 
    如果你使用ComfyUI便携版
    ```
-   cd ComfyUI-Gemini2.0
    ..\..\..\python_embeded\python.exe -m pip install -r requirements.txt
    ```
 
    如果你使用自己的Python环境
    ```
-   cd ComfyUI-Gemini2.0
    path\to\your\python.exe -m pip install -r requirements.txt
    ```
 
 ### 方法二：通过ComfyUI Manager安装
 
-1. 在ComfyUI中安装并打开ComfyUI Manager
-2. 在Manager中搜索"Gemini API"
-3. 点击安装按钮
+   1. 在ComfyUI中安装并打开ComfyUI Manager
+   2. 在Manager中搜索"Gemini API"
+   3. 点击安装按钮
 
-3. 安装完成后重启ComfyUI
+安装完成后重启ComfyUI
 
 ## 节点说明
 
@@ -52,7 +50,7 @@
 **输入参数：**
 - **prompt** (必填)：描述你想要生成的图像的文本提示词
 - **api_key** (必填)：你的Google Gemini API密钥（首次设置后会自动保存）
-- **model**：目前仅支持"models/gemini-2.0-flash-exp"
+- **model**：模型选择
 - **width**：生成图像的宽度（512-2048像素）
 - **height**：生成图像的高度（512-2048像素）
 - **temperature**：控制生成多样性的参数（0.0-2.0）
@@ -71,7 +69,7 @@
 
 ## 获取API密钥
 
-1. 访问[Google AI Studio](https://ai.google.dev/)
+1. 访问[Google AI Studio](https://aistudio.google.com/apikey?hl=zh-cn)
 2. 创建一个账户或登录
 3. 在"API Keys"部分创建一个新的API密钥
 4. 复制API密钥并粘贴到节点的api_key参数中（只需首次输入，之后会自动保存）
