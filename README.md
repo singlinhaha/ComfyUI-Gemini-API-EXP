@@ -18,18 +18,18 @@
 1. 将此存储库克隆到ComfyUI的`custom_nodes`目录：
    ```
    cd ComfyUI/custom_nodes
-   git clone https://github.com/YourUsername/ComfyUI-Gemini2.0
+   git clone https://github.com/CY-CHENYUE/ComfyUI-Gemini-API
    ```
 
 2. 安装所需依赖：
 
-   # 如果你使用ComfyUI便携版
+   如果你使用ComfyUI便携版
    ```
    cd ComfyUI-Gemini2.0
    ..\..\..\python_embeded\python.exe -m pip install -r requirements.txt
    ```
 
-   # 如果你使用自己的Python环境
+   如果你使用自己的Python环境
    ```
    cd ComfyUI-Gemini2.0
    path\to\your\python.exe -m pip install -r requirements.txt
