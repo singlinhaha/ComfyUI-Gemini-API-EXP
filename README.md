@@ -1,5 +1,7 @@
 # ComfyUI Gemini API
 
+中文 | [English](README_EN.md)
+
 用于在comfyUI中调用Google Gemini API。
 
 ## 安装说明
@@ -38,7 +40,7 @@
 
 ![alt text](workflow/Gemini-API.png)
 
-通过Gemini API生成图像的主要节点。
+通过Gemini API生成图像的节点。
 
 **输入参数：**
 - **prompt** (必填)：描述你想要生成的图像的文本提示词
