@@ -29,6 +29,7 @@ class GeminiImageGenerator:
             "optional": {
                 "seed": ("INT", {"default": 66666666, "min": 0, "max": 2147483647}),
                 "image": ("IMAGE",),
+                "keep_temp_files": ("BOOLEAN", {"default": False}),
             }
         }
 
@@ -67,6 +68,8 @@ class GeminiImageGenerator:
                 self.log("建议执行: pip install -q -U google-genai")
         except Exception as e:
             self.log(f"无法检查google-genai版本: {e}")
+        
+        self.temp_files = []  # 添加临时文件跟踪列表
     
     def log(self, message):
         """全局日志函数：记录到日志列表"""
@@ -237,13 +240,32 @@ class GeminiImageGenerator:
             traceback.print_exc()
             return self.generate_empty_image(width, height)
     
-    def generate_image(self, prompt, api_key, model, width, height, temperature, seed=66666666, image=None):
+    def cleanup_temp_files(self, keep_files=False):
+        """清理临时文件"""
+        if keep_files:
+            self.log(f"保留临时文件，共 {len(self.temp_files)} 个")
+            return
+            
+        cleaned = 0
+        for file_path in self.temp_files:
+            try:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                    cleaned += 1
+            except Exception as e:
+                self.log(f"清理文件失败: {file_path}, 错误: {e}")
+        
+        self.log(f"清理了 {cleaned}/{len(self.temp_files)} 个临时文件")
+        self.temp_files = []  # 清空列表
+    
+    def generate_image(self, prompt, api_key, model, width, height, temperature, seed=66666666, image=None, keep_temp_files=False):
         """生成图像 - 使用简化的API密钥管理"""
         temp_img_path = None
         response_text = ""
         
-        # 重置日志消息
+        # 重置日志消息和临时文件列表
         self.log_messages = []
+        self.temp_files = []
         
         try:
             # 获取API密钥
@@ -253,6 +275,7 @@ class GeminiImageGenerator:
                 error_message = "错误: 未提供有效的API密钥。请在节点中输入API密钥或确保已保存密钥。"
                 self.log(error_message)
                 full_text = "## 错误\n" + error_message + "\n\n## 使用说明\n1. 在节点中输入您的Google API密钥\n2. 密钥将自动保存到节点目录，下次可以不必输入"
+                self.cleanup_temp_files(keep_temp_files)
                 return (self.generate_empty_image(width, height), full_text)
             
             # 创建客户端实例
@@ -305,6 +328,7 @@ class GeminiImageGenerator:
                         # 保存为临时文件
                         temp_img_path = os.path.join(self.images_dir, f"reference_{int(time.time())}.png")
                         pil_image.save(temp_img_path)
+                        self.temp_files.append(temp_img_path)  # 添加到临时文件列表
                         
                         self.log(f"参考图像处理成功，尺寸: {pil_image.width}x{pil_image.height}")
                         
@@ -347,6 +371,7 @@ class GeminiImageGenerator:
                 self.log("API响应中没有candidates")
                 # 合并日志和返回值
                 full_text = "\n".join(self.log_messages) + "\n\nAPI返回了空响应"
+                self.cleanup_temp_files(keep_temp_files)
                 return (self.generate_empty_image(width, height), full_text)
             
             # 检查响应中是否有图像
@@ -369,47 +394,75 @@ class GeminiImageGenerator:
                         mime_type = part.inline_data.mime_type if hasattr(part.inline_data, 'mime_type') else "未知"
                         self.log(f"图像数据类型: {type(image_data)}, MIME类型: {mime_type}, 数据长度: {len(image_data) if image_data else 0}")
                         
+                        # 记录数据格式头部用于诊断
+                        if image_data and len(image_data) > 8:
+                            hex_prefix = ' '.join([f'{b:02x}' for b in image_data[:8]])
+                            self.log(f"图像数据前8字节: {hex_prefix}")
+                        
                         # 如果数据为空则跳过
                         if not image_data or len(image_data) < 100:
                             self.log("警告: 图像数据为空或太小")
                             continue
                         
-                        # 直接保存为节点目录下的文件
+                        # 直接保存为文件 - 跳过BytesIO
                         timestamp = int(time.time())
-                        filename = f"gemini_image_{timestamp}.png"
+                        filename = f"gemini_image_{timestamp}.raw"
                         img_file = os.path.join(self.images_dir, filename)
+                        
                         with open(img_file, "wb") as f:
                             f.write(image_data)
-                        self.log(f"已保存图像数据到文件: {img_file}")
+                        self.log(f"已保存原始图像数据到: {img_file}")
+                        self.temp_files.append(img_file)  # 添加到临时文件列表
                         
-                        # 使用请求的尺寸创建一个新的空白图像
+                        # 创建默认空白图像
                         pil_image = Image.new('RGB', (width, height), color=(128, 128, 128))
                         
-                        # 尝试打开已保存的图像
+                        # 尝试解析文件
+                        success = False
+                        
+                        # 尝试直接打开原始文件
                         try:
                             saved_image = Image.open(img_file)
-                            self.log(f"成功打开已保存的图像，尺寸: {saved_image.width}x{saved_image.height}")
+                            self.log(f"成功打开原始图像，格式: {saved_image.format}, 尺寸: {saved_image.width}x{saved_image.height}")
+                            success = True
                             
                             # 确保是RGB模式
                             if saved_image.mode != 'RGB':
                                 saved_image = saved_image.convert('RGB')
                             
-                            # 调整尺寸后粘贴到空白图像上
+                            # 调整尺寸
                             if saved_image.width != width or saved_image.height != height:
                                 saved_image = saved_image.resize((width, height), Image.Resampling.LANCZOS)
                             
                             pil_image = saved_image
-                        except Exception as e:
-                            self.log(f"无法打开保存的图像: {str(e)}")
-                            # 使用备选方法：保存原始数据到备选文件
+                            
+                        except Exception as e1:
+                            self.log(f"无法直接打开原始文件: {str(e1)}")
+                            
+                            # 尝试转换为PNG后打开
+                            png_file = os.path.join(self.images_dir, f"gemini_image_{timestamp}.png")
                             try:
-                                alt_filename = f"gemini_alt_{timestamp}.bin"
-                                alt_file = os.path.join(self.images_dir, alt_filename)
-                                pathlib.Path(alt_file).write_bytes(image_data)
-                                self.log(f"已保存原始数据到备选文件: {alt_file}")
-                                self.log("请尝试手动打开此文件检查内容")
+                                with open(png_file, "wb") as f:
+                                    f.write(image_data)
+                                self.log(f"已保存数据为PNG: {png_file}")
+                                self.temp_files.append(png_file)  # 添加到临时文件列表
+                                
+                                saved_image = Image.open(png_file)
+                                self.log(f"成功通过PNG打开图像，尺寸: {saved_image.width}x{saved_image.height}")
+                                success = True
+                                
+                                # 确保是RGB模式并调整尺寸
+                                if saved_image.mode != 'RGB':
+                                    saved_image = saved_image.convert('RGB')
+                                
+                                if saved_image.width != width or saved_image.height != height:
+                                    saved_image = saved_image.resize((width, height), Image.Resampling.LANCZOS)
+                                
+                                pil_image = saved_image
+                                
                             except Exception as e2:
-                                self.log(f"备选方法也失败: {str(e2)}")
+                                self.log(f"PNG格式打开也失败: {str(e2)}")
+                                self.log("使用默认空白图像")
                         
                         # 转换为ComfyUI格式
                         img_array = np.array(pil_image).astype(np.float32) / 255.0
@@ -417,6 +470,9 @@ class GeminiImageGenerator:
                         
                         self.log(f"图像转换为张量成功, 形状: {img_tensor.shape}")
                         image_found = True
+                        
+                        # 清理临时文件
+                        self.cleanup_temp_files(keep_temp_files)
                         
                         # 合并日志和API返回文本
                         full_text = "## 处理日志\n" + "\n".join(self.log_messages) + "\n\n## API返回\n" + response_text
@@ -431,6 +487,9 @@ class GeminiImageGenerator:
                 if not response_text:
                     response_text = "API未返回任何图像或文本"
             
+            # 清理临时文件
+            self.cleanup_temp_files(keep_temp_files)
+            
             # 合并日志和API返回文本
             full_text = "## 处理日志\n" + "\n".join(self.log_messages) + "\n\n## API返回\n" + response_text
             return (self.generate_empty_image(width, height), full_text)
@@ -438,6 +497,9 @@ class GeminiImageGenerator:
         except Exception as e:
             error_message = f"处理过程中出错: {str(e)}"
             self.log(f"Gemini图像生成错误: {str(e)}")
+            
+            # 清理临时文件
+            self.cleanup_temp_files(keep_temp_files)
             
             # 合并日志和错误信息
             full_text = "## 处理日志\n" + "\n".join(self.log_messages) + "\n\n## 错误\n" + error_message
