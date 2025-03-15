@@ -12,6 +12,7 @@ from google import genai
 from google.genai import types
 import time
 import traceback
+import pathlib
 
 class GeminiImageGenerator:
     @classmethod
@@ -39,7 +40,19 @@ class GeminiImageGenerator:
     def __init__(self):
         """初始化日志系统和API密钥存储"""
         self.log_messages = []  # 全局日志消息存储
-        self.key_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gemini_api_key.txt")
+        # 获取节点所在目录
+        self.node_dir = os.path.dirname(os.path.abspath(__file__))
+        self.key_file = os.path.join(self.node_dir, "gemini_api_key.txt")
+        
+        # 创建图像保存目录
+        self.images_dir = os.path.join(self.node_dir, "generated_images")
+        if not os.path.exists(self.images_dir):
+            try:
+                os.makedirs(self.images_dir)
+                self.log(f"创建图像保存目录: {self.images_dir}")
+            except Exception as e:
+                self.log(f"创建图像目录失败: {e}")
+                self.images_dir = self.node_dir  # 如果创建失败，使用节点目录
         
         # 检查google-genai版本
         try:
@@ -49,7 +62,7 @@ class GeminiImageGenerator:
             
             # 检查版本是否满足最低要求
             from packaging import version
-            if version.parse(genai_version) < version.parse('0.8.0'):  # 用实际需要的最低版本替换
+            if version.parse(genai_version) < version.parse('1.5.0'):  
                 self.log("警告: google-genai版本过低，建议升级到最新版本")
                 self.log("建议执行: pip install -q -U google-genai")
         except Exception as e:
@@ -253,8 +266,16 @@ class GeminiImageGenerator:
             else:
                 self.log(f"使用指定的种子值: {seed}")
             
-            # 构建简单提示
-            simple_prompt = f"Create a detailed image of: {prompt}"
+            # 构建包含尺寸信息的提示
+            aspect_ratio = width / height
+            if aspect_ratio > 1:
+                orientation = "landscape (horizontal)"
+            elif aspect_ratio < 1:
+                orientation = "portrait (vertical)"
+            else:
+                orientation = "square"
+
+            simple_prompt = f"Create a detailed image of: {prompt}. Generate the image in {orientation} orientation with exact dimensions of {width}x{height} pixels. Ensure the composition fits properly within these dimensions without stretching or distortion."
             
             # 配置生成参数，使用用户指定的温度值
             gen_config = types.GenerateContentConfig(
@@ -282,7 +303,7 @@ class GeminiImageGenerator:
                         pil_image = Image.fromarray(input_image)
                         
                         # 保存为临时文件
-                        temp_img_path = os.path.join(tempfile.gettempdir(), f"reference_{int(time.time())}.png")
+                        temp_img_path = os.path.join(self.images_dir, f"reference_{int(time.time())}.png")
                         pil_image.save(temp_img_path)
                         
                         self.log(f"参考图像处理成功，尺寸: {pil_image.width}x{pil_image.height}")
@@ -343,108 +364,52 @@ class GeminiImageGenerator:
                 elif hasattr(part, 'inline_data') and part.inline_data is not None:
                     self.log("API返回数据解析处理")
                     try:
-                        # 记录图像数据信息以便调试
+                        # 获取图像数据
                         image_data = part.inline_data.data
                         mime_type = part.inline_data.mime_type if hasattr(part.inline_data, 'mime_type') else "未知"
                         self.log(f"图像数据类型: {type(image_data)}, MIME类型: {mime_type}, 数据长度: {len(image_data) if image_data else 0}")
                         
-                        # 确认数据不为空且长度足够
+                        # 如果数据为空则跳过
                         if not image_data or len(image_data) < 100:
                             self.log("警告: 图像数据为空或太小")
                             continue
                         
-                        # 尝试检查数据的前几个字节，确认是否为有效的图像格式
-                        is_valid_image = False
-                        if len(image_data) > 8:
-                            # 检查常见图像格式的魔法字节
-                            magic_bytes = image_data[:8]
-                            self.log(f"图像魔法字节(十六进制): {magic_bytes.hex()[:16]}...")
-                            # PNG 头部是 \x89PNG\r\n\x1a\n
-                            if magic_bytes.startswith(b'\x89PNG'):
-                                self.log("检测到有效的PNG图像格式")
-                                is_valid_image = True
-                            # JPEG 头部是 \xff\xd8
-                            elif magic_bytes.startswith(b'\xff\xd8'):
-                                self.log("检测到有效的JPEG图像格式")
-                                is_valid_image = True
-                            # GIF 头部是 GIF87a 或 GIF89a
-                            elif magic_bytes.startswith(b'GIF87a') or magic_bytes.startswith(b'GIF89a'):
-                                self.log("检测到有效的GIF图像格式")
-                                is_valid_image = True
+                        # 直接保存为节点目录下的文件
+                        timestamp = int(time.time())
+                        filename = f"gemini_image_{timestamp}.png"
+                        img_file = os.path.join(self.images_dir, filename)
+                        with open(img_file, "wb") as f:
+                            f.write(image_data)
+                        self.log(f"已保存图像数据到文件: {img_file}")
                         
-                        if not is_valid_image:
-                            self.log("警告: 数据可能不是有效的图像格式")
+                        # 使用请求的尺寸创建一个新的空白图像
+                        pil_image = Image.new('RGB', (width, height), color=(128, 128, 128))
                         
-                        # 多种方法尝试打开图像
-                        pil_image = None
-                        
-                        # 方法1: 直接用PIL打开
+                        # 尝试打开已保存的图像
                         try:
-                            pil_image = Image.open(BytesIO(image_data))
-                            self.log(f"方法1成功: 直接使用PIL打开图像, 尺寸: {pil_image.width}x{pil_image.height}")
-                        except Exception as e1:
-                            self.log(f"方法1失败: {str(e1)}")
+                            saved_image = Image.open(img_file)
+                            self.log(f"成功打开已保存的图像，尺寸: {saved_image.width}x{saved_image.height}")
                             
-                            # 方法2: 保存到临时文件再打开
+                            # 确保是RGB模式
+                            if saved_image.mode != 'RGB':
+                                saved_image = saved_image.convert('RGB')
+                            
+                            # 调整尺寸后粘贴到空白图像上
+                            if saved_image.width != width or saved_image.height != height:
+                                saved_image = saved_image.resize((width, height), Image.Resampling.LANCZOS)
+                            
+                            pil_image = saved_image
+                        except Exception as e:
+                            self.log(f"无法打开保存的图像: {str(e)}")
+                            # 使用备选方法：保存原始数据到备选文件
                             try:
-                                temp_file = os.path.join(tempfile.gettempdir(), f"gemini_image_{int(time.time())}.png")
-                                with open(temp_file, "wb") as f:
-                                    f.write(image_data)
-                                self.log(f"已保存图像数据到临时文件: {temp_file}")
-                                
-                                pil_image = Image.open(temp_file)
-                                self.log(f"方法2成功: 通过临时文件打开图像")
+                                alt_filename = f"gemini_alt_{timestamp}.bin"
+                                alt_file = os.path.join(self.images_dir, alt_filename)
+                                pathlib.Path(alt_file).write_bytes(image_data)
+                                self.log(f"已保存原始数据到备选文件: {alt_file}")
+                                self.log("请尝试手动打开此文件检查内容")
                             except Exception as e2:
-                                self.log(f"方法2失败: {str(e2)}")
-                                
-                                # 方法3: 尝试修复数据头再打开
-                                try:
-                                    # 如果MIME类型是PNG但数据头不正确，尝试添加正确的PNG头
-                                    if mime_type == "image/png" and not image_data.startswith(b'\x89PNG'):
-                                        self.log("尝试修复PNG头部")
-                                        fixed_data = b'\x89PNG\r\n\x1a\n' + image_data[8:] if len(image_data) > 8 else image_data
-                                        pil_image = Image.open(BytesIO(fixed_data))
-                                        self.log("方法3成功: 通过修复头部打开PNG图像")
-                                    # 如果MIME类型是JPEG但数据头不正确，尝试添加正确的JPEG头
-                                    elif mime_type == "image/jpeg" and not image_data.startswith(b'\xff\xd8'):
-                                        self.log("尝试修复JPEG头部")
-                                        fixed_data = b'\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x01\x00\x48\x00\x48\x00\x00' + image_data[20:] if len(image_data) > 20 else image_data
-                                        pil_image = Image.open(BytesIO(fixed_data))
-                                        self.log("方法3成功: 通过修复头部打开JPEG图像")
-                                except Exception as e3:
-                                    self.log(f"方法3失败: {str(e3)}")
-                                    
-                                    # 方法4: 尝试使用base64解码再打开
-                                    try:
-                                        if isinstance(image_data, bytes):
-                                            # 尝试将bytes转换为字符串并进行base64解码
-                                            str_data = image_data.decode('utf-8', errors='ignore')
-                                            if 'base64,' in str_data:
-                                                base64_part = str_data.split('base64,')[1]
-                                                decoded_data = base64.b64decode(base64_part)
-                                                pil_image = Image.open(BytesIO(decoded_data))
-                                                self.log("方法4成功: 通过base64解码打开图像")
-                                    except Exception as e4:
-                                        self.log(f"方法4失败: {str(e4)}")
-                                        
-                                        # 所有方法都失败，跳过这个数据
-                                        self.log("所有图像处理方法都失败，无法处理返回的数据")
-                                        continue
-                        
-                        # 确保图像已成功加载
-                        if pil_image is None:
-                            self.log("无法打开图像，跳过")
-                            continue
-                            
-                        # 确保图像是RGB模式
-                        if pil_image.mode != 'RGB':
-                            pil_image = pil_image.convert('RGB')
-                            self.log(f"图像已转换为RGB模式")
-                        
-                        # 调整图像尺寸
-                        if pil_image.width != width or pil_image.height != height:
-                            pil_image = pil_image.resize((width, height), Image.Resampling.LANCZOS)
-                            self.log(f"图像已调整为目标尺寸: {width}x{height}")
+                                self.log(f"备选方法也失败: {str(e2)}")
                         
                         # 转换为ComfyUI格式
                         img_array = np.array(pil_image).astype(np.float32) / 255.0
