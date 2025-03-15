@@ -40,6 +40,20 @@ class GeminiImageGenerator:
         """初始化日志系统和API密钥存储"""
         self.log_messages = []  # 全局日志消息存储
         self.key_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gemini_api_key.txt")
+        
+        # 检查google-genai版本
+        try:
+            import importlib.metadata
+            genai_version = importlib.metadata.version('google-genai')
+            self.log(f"当前google-genai版本: {genai_version}")
+            
+            # 检查版本是否满足最低要求
+            from packaging import version
+            if version.parse(genai_version) < version.parse('0.8.0'):  # 用实际需要的最低版本替换
+                self.log("警告: google-genai版本过低，建议升级到最新版本")
+                self.log("建议执行: pip install -q -U google-genai")
+        except Exception as e:
+            self.log(f"无法检查google-genai版本: {e}")
     
     def log(self, message):
         """全局日志函数：记录到日志列表"""
@@ -327,15 +341,110 @@ class GeminiImageGenerator:
                 
                 # 检查是否为图像部分
                 elif hasattr(part, 'inline_data') and part.inline_data is not None:
-                    self.log("API返回了图像数据")
+                    self.log("API返回数据解析处理")
                     try:
-                        # 从二进制数据创建图像
-                        pil_image = Image.open(BytesIO(part.inline_data.data))
-                        self.log(f"成功读取图像, 尺寸: {pil_image.width}x{pil_image.height}")
+                        # 记录图像数据信息以便调试
+                        image_data = part.inline_data.data
+                        mime_type = part.inline_data.mime_type if hasattr(part.inline_data, 'mime_type') else "未知"
+                        self.log(f"图像数据类型: {type(image_data)}, MIME类型: {mime_type}, 数据长度: {len(image_data) if image_data else 0}")
+                        
+                        # 确认数据不为空且长度足够
+                        if not image_data or len(image_data) < 100:
+                            self.log("警告: 图像数据为空或太小")
+                            continue
+                        
+                        # 尝试检查数据的前几个字节，确认是否为有效的图像格式
+                        is_valid_image = False
+                        if len(image_data) > 8:
+                            # 检查常见图像格式的魔法字节
+                            magic_bytes = image_data[:8]
+                            self.log(f"图像魔法字节(十六进制): {magic_bytes.hex()[:16]}...")
+                            # PNG 头部是 \x89PNG\r\n\x1a\n
+                            if magic_bytes.startswith(b'\x89PNG'):
+                                self.log("检测到有效的PNG图像格式")
+                                is_valid_image = True
+                            # JPEG 头部是 \xff\xd8
+                            elif magic_bytes.startswith(b'\xff\xd8'):
+                                self.log("检测到有效的JPEG图像格式")
+                                is_valid_image = True
+                            # GIF 头部是 GIF87a 或 GIF89a
+                            elif magic_bytes.startswith(b'GIF87a') or magic_bytes.startswith(b'GIF89a'):
+                                self.log("检测到有效的GIF图像格式")
+                                is_valid_image = True
+                        
+                        if not is_valid_image:
+                            self.log("警告: 数据可能不是有效的图像格式")
+                        
+                        # 多种方法尝试打开图像
+                        pil_image = None
+                        
+                        # 方法1: 直接用PIL打开
+                        try:
+                            pil_image = Image.open(BytesIO(image_data))
+                            self.log(f"方法1成功: 直接使用PIL打开图像, 尺寸: {pil_image.width}x{pil_image.height}")
+                        except Exception as e1:
+                            self.log(f"方法1失败: {str(e1)}")
+                            
+                            # 方法2: 保存到临时文件再打开
+                            try:
+                                temp_file = os.path.join(tempfile.gettempdir(), f"gemini_image_{int(time.time())}.png")
+                                with open(temp_file, "wb") as f:
+                                    f.write(image_data)
+                                self.log(f"已保存图像数据到临时文件: {temp_file}")
+                                
+                                pil_image = Image.open(temp_file)
+                                self.log(f"方法2成功: 通过临时文件打开图像")
+                            except Exception as e2:
+                                self.log(f"方法2失败: {str(e2)}")
+                                
+                                # 方法3: 尝试修复数据头再打开
+                                try:
+                                    # 如果MIME类型是PNG但数据头不正确，尝试添加正确的PNG头
+                                    if mime_type == "image/png" and not image_data.startswith(b'\x89PNG'):
+                                        self.log("尝试修复PNG头部")
+                                        fixed_data = b'\x89PNG\r\n\x1a\n' + image_data[8:] if len(image_data) > 8 else image_data
+                                        pil_image = Image.open(BytesIO(fixed_data))
+                                        self.log("方法3成功: 通过修复头部打开PNG图像")
+                                    # 如果MIME类型是JPEG但数据头不正确，尝试添加正确的JPEG头
+                                    elif mime_type == "image/jpeg" and not image_data.startswith(b'\xff\xd8'):
+                                        self.log("尝试修复JPEG头部")
+                                        fixed_data = b'\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x01\x00\x48\x00\x48\x00\x00' + image_data[20:] if len(image_data) > 20 else image_data
+                                        pil_image = Image.open(BytesIO(fixed_data))
+                                        self.log("方法3成功: 通过修复头部打开JPEG图像")
+                                except Exception as e3:
+                                    self.log(f"方法3失败: {str(e3)}")
+                                    
+                                    # 方法4: 尝试使用base64解码再打开
+                                    try:
+                                        if isinstance(image_data, bytes):
+                                            # 尝试将bytes转换为字符串并进行base64解码
+                                            str_data = image_data.decode('utf-8', errors='ignore')
+                                            if 'base64,' in str_data:
+                                                base64_part = str_data.split('base64,')[1]
+                                                decoded_data = base64.b64decode(base64_part)
+                                                pil_image = Image.open(BytesIO(decoded_data))
+                                                self.log("方法4成功: 通过base64解码打开图像")
+                                    except Exception as e4:
+                                        self.log(f"方法4失败: {str(e4)}")
+                                        
+                                        # 所有方法都失败，跳过这个数据
+                                        self.log("所有图像处理方法都失败，无法处理返回的数据")
+                                        continue
+                        
+                        # 确保图像已成功加载
+                        if pil_image is None:
+                            self.log("无法打开图像，跳过")
+                            continue
+                            
+                        # 确保图像是RGB模式
+                        if pil_image.mode != 'RGB':
+                            pil_image = pil_image.convert('RGB')
+                            self.log(f"图像已转换为RGB模式")
                         
                         # 调整图像尺寸
                         if pil_image.width != width or pil_image.height != height:
                             pil_image = pil_image.resize((width, height), Image.Resampling.LANCZOS)
+                            self.log(f"图像已调整为目标尺寸: {width}x{height}")
                         
                         # 转换为ComfyUI格式
                         img_array = np.array(pil_image).astype(np.float32) / 255.0
@@ -349,6 +458,7 @@ class GeminiImageGenerator:
                         return (img_tensor, full_text)
                     except Exception as e:
                         self.log(f"图像处理错误: {e}")
+                        traceback.print_exc()  # 添加详细的错误追踪信息
             
             # 没有找到图像数据，但可能有文本
             if not image_found:
