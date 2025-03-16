@@ -6,13 +6,10 @@ import torch
 import numpy as np
 from PIL import Image
 import requests
-import tempfile
 from io import BytesIO
 from google import genai
 from google.genai import types
-import time
 import traceback
-import pathlib
 
 class GeminiImageGenerator:
     @classmethod
@@ -29,7 +26,6 @@ class GeminiImageGenerator:
             "optional": {
                 "seed": ("INT", {"default": 66666666, "min": 0, "max": 2147483647}),
                 "image": ("IMAGE",),
-                "keep_temp_files": ("BOOLEAN", {"default": False}),
             }
         }
 
@@ -45,31 +41,34 @@ class GeminiImageGenerator:
         self.node_dir = os.path.dirname(os.path.abspath(__file__))
         self.key_file = os.path.join(self.node_dir, "gemini_api_key.txt")
         
-        # 创建图像保存目录
-        self.images_dir = os.path.join(self.node_dir, "generated_images")
-        if not os.path.exists(self.images_dir):
-            try:
-                os.makedirs(self.images_dir)
-                self.log(f"创建图像保存目录: {self.images_dir}")
-            except Exception as e:
-                self.log(f"创建图像目录失败: {e}")
-                self.images_dir = self.node_dir  # 如果创建失败，使用节点目录
-        
         # 检查google-genai版本
         try:
             import importlib.metadata
             genai_version = importlib.metadata.version('google-genai')
             self.log(f"当前google-genai版本: {genai_version}")
             
+            # 检查PIL/Pillow版本
+            try:
+                import PIL
+                self.log(f"当前PIL/Pillow版本: {PIL.__version__}")
+            except Exception as e:
+                self.log(f"无法检查PIL/Pillow版本: {str(e)}")
+            
             # 检查版本是否满足最低要求
             from packaging import version
             if version.parse(genai_version) < version.parse('1.5.0'):  
                 self.log("警告: google-genai版本过低，建议升级到最新版本")
                 self.log("建议执行: pip install -q -U google-genai")
+            
+            # 检查PIL/Pillow版本是否满足要求
+            try:
+                if version.parse(PIL.__version__) < version.parse('9.5.0'):
+                    self.log("警告: PIL/Pillow版本过低，建议升级到9.5.0或更高版本")
+                    self.log("建议执行: pip install -U Pillow>=9.5.0")
+            except Exception:
+                pass
         except Exception as e:
-            self.log(f"无法检查google-genai版本: {e}")
-        
-        self.temp_files = []  # 添加临时文件跟踪列表
+            self.log(f"无法检查版本信息: {e}")
     
     def log(self, message):
         """全局日志函数：记录到日志列表"""
@@ -159,113 +158,12 @@ class GeminiImageGenerator:
             traceback.print_exc()
             return None
     
-    def save_tensor_as_image(self, image_tensor, file_path):
-        """将图像张量保存为文件"""
-        try:
-            # 转换为numpy数组
-            if torch.is_tensor(image_tensor):
-                if len(image_tensor.shape) == 4:
-                    image_tensor = image_tensor[0]  # 获取批次中的第一张图像
-                
-                # [C, H, W] -> [H, W, C]
-                image_np = image_tensor.permute(1, 2, 0).cpu().numpy()
-            else:
-                image_np = image_tensor
-            
-            # 缩放到0-255
-            image_np = (image_np * 255).astype(np.uint8)
-            
-            # 创建PIL图像
-            pil_image = Image.fromarray(image_np)
-            
-            # 保存到文件
-            pil_image.save(file_path, format="PNG")
-            self.log(f"已保存图像到: {file_path}")
-            return True
-        except Exception as e:
-            self.log(f"图像保存错误: {str(e)}")
-            return False
-    
-    def process_image_data(self, image_data, width, height):
-        """处理API返回的图像数据，返回ComfyUI格式的图像张量 [B,H,W,C]"""
-        try:
-            # 打印图像数据类型和大小以便调试
-            self.log(f"图像数据类型: {type(image_data)}")
-            self.log(f"图像数据长度: {len(image_data) if hasattr(image_data, '__len__') else '未知'}")
-            
-            # 尝试直接转换为PIL图像
-            try:
-                pil_image = Image.open(BytesIO(image_data))
-                self.log(f"成功打开图像, 尺寸: {pil_image.width}x{pil_image.height}, 模式: {pil_image.mode}")
-            except Exception as e:
-                self.log(f"无法直接打开图像数据: {e}")
-                
-                # 尝试其他方式解析，例如base64解码
-                try:
-                    # 检查是否是base64编码的字符串
-                    if isinstance(image_data, str):
-                        # 尝试移除base64前缀
-                        if "base64," in image_data:
-                            image_data = image_data.split("base64,")[1]
-                        decoded_data = base64.b64decode(image_data)
-                        pil_image = Image.open(BytesIO(decoded_data))
-                    else:
-                        # 如果是向量或其他格式，生成一个占位图像
-                        self.log("无法解析图像数据，创建一个空白图像")
-                        return self.generate_empty_image(width, height)
-                except Exception as e2:
-                    self.log(f"备用解析方法也失败: {e2}")
-                    return self.generate_empty_image(width, height)
-            
-            # 确保图像是RGB模式
-            if pil_image.mode != 'RGB':
-                pil_image = pil_image.convert('RGB')
-                self.log(f"图像已转换为RGB模式")
-            
-            # 调整图像大小
-            if pil_image.width != width or pil_image.height != height:
-                pil_image = pil_image.resize((width, height), Image.Resampling.LANCZOS)
-                self.log(f"图像已调整为目标尺寸: {width}x{height}")
-            
-            # 关键修复: 使用ComfyUI兼容的格式 [batch, height, width, channels]
-            # 而不是PyTorch标准的 [batch, channels, height, width]
-            img_array = np.array(pil_image).astype(np.float32) / 255.0
-            img_tensor = torch.from_numpy(img_array).unsqueeze(0)
-            
-            self.log(f"生成的图像张量格式: 形状={img_tensor.shape}, 类型={img_tensor.dtype}")
-            return (img_tensor,)
-            
-        except Exception as e:
-            self.log(f"处理图像数据时出错: {e}")
-            traceback.print_exc()
-            return self.generate_empty_image(width, height)
-    
-    def cleanup_temp_files(self, keep_files=False):
-        """清理临时文件"""
-        if keep_files:
-            self.log(f"保留临时文件，共 {len(self.temp_files)} 个")
-            return
-            
-        cleaned = 0
-        for file_path in self.temp_files:
-            try:
-                if os.path.exists(file_path):
-                    os.remove(file_path)
-                    cleaned += 1
-            except Exception as e:
-                self.log(f"清理文件失败: {file_path}, 错误: {e}")
-        
-        self.log(f"清理了 {cleaned}/{len(self.temp_files)} 个临时文件")
-        self.temp_files = []  # 清空列表
-    
-    def generate_image(self, prompt, api_key, model, width, height, temperature, seed=66666666, image=None, keep_temp_files=False):
+    def generate_image(self, prompt, api_key, model, width, height, temperature, seed=66666666, image=None):
         """生成图像 - 使用简化的API密钥管理"""
-        temp_img_path = None
         response_text = ""
         
-        # 重置日志消息和临时文件列表
+        # 重置日志消息
         self.log_messages = []
-        self.temp_files = []
         
         try:
             # 获取API密钥
@@ -275,7 +173,6 @@ class GeminiImageGenerator:
                 error_message = "错误: 未提供有效的API密钥。请在节点中输入API密钥或确保已保存密钥。"
                 self.log(error_message)
                 full_text = "## 错误\n" + error_message + "\n\n## 使用说明\n1. 在节点中输入您的Google API密钥\n2. 密钥将自动保存到节点目录，下次可以不必输入"
-                self.cleanup_temp_files(keep_temp_files)
                 return (self.generate_empty_image(width, height), full_text)
             
             # 创建客户端实例
@@ -325,16 +222,13 @@ class GeminiImageGenerator:
                         input_image = (input_image * 255).astype(np.uint8)
                         pil_image = Image.fromarray(input_image)
                         
-                        # 保存为临时文件
-                        temp_img_path = os.path.join(self.images_dir, f"reference_{int(time.time())}.png")
-                        pil_image.save(temp_img_path)
-                        self.temp_files.append(temp_img_path)  # 添加到临时文件列表
-                        
                         self.log(f"参考图像处理成功，尺寸: {pil_image.width}x{pil_image.height}")
                         
-                        # 读取图像数据
-                        with open(temp_img_path, "rb") as f:
-                            image_bytes = f.read()
+                        # 直接在内存中处理，不保存为文件
+                        img_byte_arr = BytesIO()
+                        pil_image.save(img_byte_arr, format='PNG')
+                        img_byte_arr.seek(0)
+                        image_bytes = img_byte_arr.read()
                         
                         # 添加图像部分和文本部分
                         img_part = {"inline_data": {"mime_type": "image/png", "data": image_bytes}}
@@ -371,7 +265,6 @@ class GeminiImageGenerator:
                 self.log("API响应中没有candidates")
                 # 合并日志和返回值
                 full_text = "\n".join(self.log_messages) + "\n\nAPI返回了空响应"
-                self.cleanup_temp_files(keep_temp_files)
                 return (self.generate_empty_image(width, height), full_text)
             
             # 检查响应中是否有图像
@@ -394,89 +287,52 @@ class GeminiImageGenerator:
                         mime_type = part.inline_data.mime_type if hasattr(part.inline_data, 'mime_type') else "未知"
                         self.log(f"图像数据类型: {type(image_data)}, MIME类型: {mime_type}, 数据长度: {len(image_data) if image_data else 0}")
                         
-                        # 记录数据格式头部用于诊断
+                        # 记录前8个字节用于诊断
                         if image_data and len(image_data) > 8:
                             hex_prefix = ' '.join([f'{b:02x}' for b in image_data[:8]])
                             self.log(f"图像数据前8字节: {hex_prefix}")
+                            
+                            # 检测Base64编码的PNG
+                            if hex_prefix.startswith('69 56 42 4f 52'):
+                                try:
+                                    self.log("检测到Base64编码的PNG，正在解码...")
+                                    base64_str = image_data.decode('utf-8', errors='ignore')
+                                    image_data = base64.b64decode(base64_str)
+                                    self.log(f"Base64解码成功，新数据长度: {len(image_data)}")
+                                except Exception as e:
+                                    self.log(f"Base64解码失败: {str(e)}")
                         
-                        # 如果数据为空则跳过
-                        if not image_data or len(image_data) < 100:
-                            self.log("警告: 图像数据为空或太小")
-                            continue
-                        
-                        # 直接保存为文件 - 跳过BytesIO
-                        timestamp = int(time.time())
-                        filename = f"gemini_image_{timestamp}.raw"
-                        img_file = os.path.join(self.images_dir, filename)
-                        
-                        with open(img_file, "wb") as f:
-                            f.write(image_data)
-                        self.log(f"已保存原始图像数据到: {img_file}")
-                        self.temp_files.append(img_file)  # 添加到临时文件列表
-                        
-                        # 创建默认空白图像
-                        pil_image = Image.new('RGB', (width, height), color=(128, 128, 128))
-                        
-                        # 尝试解析文件
-                        success = False
-                        
-                        # 尝试直接打开原始文件
+                        # BytesIO正确使用方法 - 修改为更直接的初始化方式
                         try:
-                            saved_image = Image.open(img_file)
-                            self.log(f"成功打开原始图像，格式: {saved_image.format}, 尺寸: {saved_image.width}x{saved_image.height}")
-                            success = True
+                            # 直接使用字节数据初始化BytesIO，更简洁更兼容
+                            buffer = BytesIO(image_data)
+                            
+                            # 尝试打开图像
+                            pil_image = Image.open(buffer)
+                            self.log(f"成功打开图像: {pil_image.width}x{pil_image.height}, 格式: {pil_image.format}")
                             
                             # 确保是RGB模式
-                            if saved_image.mode != 'RGB':
-                                saved_image = saved_image.convert('RGB')
+                            if pil_image.mode != 'RGB':
+                                pil_image = pil_image.convert('RGB')
                             
-                            # 调整尺寸
-                            if saved_image.width != width or saved_image.height != height:
-                                saved_image = saved_image.resize((width, height), Image.Resampling.LANCZOS)
+                            # 调整大小
+                            if pil_image.width != width or pil_image.height != height:
+                                pil_image = pil_image.resize((width, height), Image.Resampling.LANCZOS)
                             
-                            pil_image = saved_image
+                            # 转换为ComfyUI格式
+                            img_array = np.array(pil_image).astype(np.float32) / 255.0
+                            img_tensor = torch.from_numpy(img_array).unsqueeze(0)
                             
-                        except Exception as e1:
-                            self.log(f"无法直接打开原始文件: {str(e1)}")
+                            self.log(f"图像转换为张量成功, 形状: {img_tensor.shape}")
                             
-                            # 尝试转换为PNG后打开
-                            png_file = os.path.join(self.images_dir, f"gemini_image_{timestamp}.png")
-                            try:
-                                with open(png_file, "wb") as f:
-                                    f.write(image_data)
-                                self.log(f"已保存数据为PNG: {png_file}")
-                                self.temp_files.append(png_file)  # 添加到临时文件列表
-                                
-                                saved_image = Image.open(png_file)
-                                self.log(f"成功通过PNG打开图像，尺寸: {saved_image.width}x{saved_image.height}")
-                                success = True
-                                
-                                # 确保是RGB模式并调整尺寸
-                                if saved_image.mode != 'RGB':
-                                    saved_image = saved_image.convert('RGB')
-                                
-                                if saved_image.width != width or saved_image.height != height:
-                                    saved_image = saved_image.resize((width, height), Image.Resampling.LANCZOS)
-                                
-                                pil_image = saved_image
-                                
-                            except Exception as e2:
-                                self.log(f"PNG格式打开也失败: {str(e2)}")
-                                self.log("使用默认空白图像")
+                            # 合并日志和API返回文本
+                            full_text = "## 处理日志\n" + "\n".join(self.log_messages) + "\n\n## API返回\n" + response_text
+                            return (img_tensor, full_text)
                         
-                        # 转换为ComfyUI格式
-                        img_array = np.array(pil_image).astype(np.float32) / 255.0
-                        img_tensor = torch.from_numpy(img_array).unsqueeze(0)
-                        
-                        self.log(f"图像转换为张量成功, 形状: {img_tensor.shape}")
-                        image_found = True
-                        
-                        # 清理临时文件
-                        self.cleanup_temp_files(keep_temp_files)
-                        
-                        # 合并日志和API返回文本
-                        full_text = "## 处理日志\n" + "\n".join(self.log_messages) + "\n\n## API返回\n" + response_text
-                        return (img_tensor, full_text)
+                        except Exception as e:
+                            self.log(f"使用BytesIO打开图像失败: {str(e)}")
+                            self.log("无法处理图像数据，使用默认空白图像")
+                            img_tensor = self.generate_empty_image(width, height)
                     except Exception as e:
                         self.log(f"图像处理错误: {e}")
                         traceback.print_exc()  # 添加详细的错误追踪信息
@@ -487,9 +343,6 @@ class GeminiImageGenerator:
                 if not response_text:
                     response_text = "API未返回任何图像或文本"
             
-            # 清理临时文件
-            self.cleanup_temp_files(keep_temp_files)
-            
             # 合并日志和API返回文本
             full_text = "## 处理日志\n" + "\n".join(self.log_messages) + "\n\n## API返回\n" + response_text
             return (self.generate_empty_image(width, height), full_text)
@@ -497,9 +350,6 @@ class GeminiImageGenerator:
         except Exception as e:
             error_message = f"处理过程中出错: {str(e)}"
             self.log(f"Gemini图像生成错误: {str(e)}")
-            
-            # 清理临时文件
-            self.cleanup_temp_files(keep_temp_files)
             
             # 合并日志和错误信息
             full_text = "## 处理日志\n" + "\n".join(self.log_messages) + "\n\n## 错误\n" + error_message
