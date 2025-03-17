@@ -48,7 +48,7 @@ A node that generates images using the Gemini API.
 - **model**: Model selection
 - **width**: Width of the generated image (512-2048 pixels)
 - **height**: Height of the generated image (512-2048 pixels)
-- **aspect_ratio**: Choose image orientation (Landscape, Portrait, Square)
+- **aspect_ratio**: Choose image orientation (Free, Landscape, Portrait, Square)
 - **temperature**: Parameter controlling generation diversity (0.0-2.0)
 - **seed** (optional): Random seed for reproducible results
 - **image** (optional): Reference image input for style guidance

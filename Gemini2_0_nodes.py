@@ -20,10 +20,11 @@ class GeminiImageGenerator:
                 "api_key": ("STRING", {"default": "", "multiline": False}),
                 "model": (["models/gemini-2.0-flash-exp"], {"default": "models/gemini-2.0-flash-exp"}),
                 "aspect_ratio": ([
+                    "Free (自由比例)",
                     "Landscape (横屏)",
                     "Portrait (竖屏)",
                     "Square (方形)",
-                ], {"default": "Square (方形)"}),
+                ], {"default": "Free (自由比例)"}),
                 "temperature": ("FLOAT", {"default": 1, "min": 0.0, "max": 2.0, "step": 0.05}),
             },
             "optional": {
@@ -188,16 +189,19 @@ class GeminiImageGenerator:
             else:
                 self.log(f"使用指定的种子值: {seed}")
             
-            # 直接从选择确定方向
-            if "Landscape" in aspect_ratio:
-                orientation = "landscape (wide/horizontal) image"
+            # 直接从选择确定方向和提示词
+            if "Free" in aspect_ratio:
+                # 不指定任何方向或比例限制
+                simple_prompt = f"Create a detailed image of: {prompt}."
+            elif "Landscape" in aspect_ratio:
+                orientation = "wide rectangular image where width is greater than height"
+                simple_prompt = f"Create a detailed image of: {prompt}. Generate the image as a {orientation}."
             elif "Portrait" in aspect_ratio:
-                orientation = "portrait (tall/vertical) image"
+                orientation = "tall rectangular image where height is greater than width"
+                simple_prompt = f"Create a detailed image of: {prompt}. Generate the image as a {orientation}."
             else:  # Square
-                orientation = "square image with equal width and height"
-            
-            # 构建提示，更简单更直接
-            simple_prompt = f"Create a detailed image of: {prompt}. Generate the image as a {orientation}. Ensure the composition fits properly within this format without stretching or distortion."
+                orientation = "square image where width equals height"
+                simple_prompt = f"Create a detailed image of: {prompt}. Generate the image as a {orientation}."
             
             # 配置生成参数，使用用户指定的温度值
             gen_config = types.GenerateContentConfig(
