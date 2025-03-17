@@ -48,6 +48,7 @@ A node that generates images using the Gemini API.
 - **model**: Model selection
 - **width**: Width of the generated image (512-2048 pixels)
 - **height**: Height of the generated image (512-2048 pixels)
+- **aspect_ratio**: Choose image aspect ratio (16:9, 9:16, 4:3, 3:4, 1:1, 3:2, 2:3)
 - **temperature**: Parameter controlling generation diversity (0.0-2.0)
 - **seed** (optional): Random seed for reproducible results
 - **image** (optional): Reference image input for style guidance
@@ -82,6 +83,8 @@ A node that generates images using the Gemini API.
 - Image generation quality and speed depend on Google's server status and your network connection
 - Reference image feature will send your images to Google services, please be aware of privacy implications
 - API key needs to be entered only once, it will be stored in gemini_api_key.txt in the node directory
+- About Image Aspect Ratio:
+  Gemini API generates images with appropriate aspect ratios without requiring specific pixel dimensions. Select your desired ratio (such as 16:9 widescreen, 1:1 square, etc.), and the API will return images with corresponding proportions (though the model may not always follow instructions perfectly). This differs from the old method of specifying exact pixel dimensions and allows the API to determine the optimal resolution for the content without stretching or distortion.
 
 ## Contact Me
 

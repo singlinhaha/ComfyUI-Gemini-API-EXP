@@ -19,8 +19,15 @@ class GeminiImageGenerator:
                 "prompt": ("STRING", {"multiline": True}),
                 "api_key": ("STRING", {"default": "", "multiline": False}),
                 "model": (["models/gemini-2.0-flash-exp"], {"default": "models/gemini-2.0-flash-exp"}),
-                "width": ("INT", {"default": 1024, "min": 512, "max": 2048, "step": 8}),
-                "height": ("INT", {"default": 1024, "min": 512, "max": 2048, "step": 8}),
+                "aspect_ratio": ([
+                    "16:9",
+                    "9:16",
+                    "4:3",
+                    "3:4",
+                    "1:1",
+                    "3:2",
+                    "2:3",
+                ], {"default": "1:1"}),
                 "temperature": ("FLOAT", {"default": 1, "min": 0.0, "max": 2.0, "step": 0.05}),
             },
             "optional": {
@@ -105,10 +112,9 @@ class GeminiImageGenerator:
         self.log("警告: 未提供有效的API密钥")
         return ""
     
-    def generate_empty_image(self, width, height):
-        """生成标准格式的空白RGB图像张量 - 确保ComfyUI兼容格式 [B,H,W,C]"""
-        # 创建一个符合ComfyUI标准的图像张量
-        # ComfyUI期望 [batch, height, width, channels] 格式!
+    def generate_empty_image(self, width=512, height=512):
+        """生成标准格式的空白RGB图像张量 - 使用默认尺寸"""
+        # 根据比例设置默认尺寸
         empty_image = np.ones((height, width, 3), dtype=np.float32) * 0.2
         tensor = torch.from_numpy(empty_image).unsqueeze(0) # [1, H, W, 3]
         
@@ -158,8 +164,8 @@ class GeminiImageGenerator:
             traceback.print_exc()
             return None
     
-    def generate_image(self, prompt, api_key, model, width, height, temperature, seed=66666666, image=None):
-        """生成图像 - 使用简化的API密钥管理"""
+    def generate_image(self, prompt, api_key, model, aspect_ratio, temperature, seed=66666666, image=None):
+        """生成图像 - 使用简化的API密钥管理，基于比例而非尺寸"""
         response_text = ""
         
         # 重置日志消息
@@ -173,7 +179,7 @@ class GeminiImageGenerator:
                 error_message = "错误: 未提供有效的API密钥。请在节点中输入API密钥或确保已保存密钥。"
                 self.log(error_message)
                 full_text = "## 错误\n" + error_message + "\n\n## 使用说明\n1. 在节点中输入您的Google API密钥\n2. 密钥将自动保存到节点目录，下次可以不必输入"
-                return (self.generate_empty_image(width, height), full_text)
+                return (self.generate_empty_image(512, 512), full_text)  # 使用默认尺寸的空白图像
             
             # 创建客户端实例
             client = genai.Client(api_key=actual_api_key)
@@ -186,16 +192,27 @@ class GeminiImageGenerator:
             else:
                 self.log(f"使用指定的种子值: {seed}")
             
-            # 构建包含尺寸信息的提示
-            aspect_ratio = width / height
-            if aspect_ratio > 1:
-                orientation = "landscape (horizontal)"
-            elif aspect_ratio < 1:
-                orientation = "portrait (vertical)"
+            # 提取比例数值部分，去掉中文描述
+            ratio_value = aspect_ratio  # 现在选项就是纯数字比例，如"16:9"
+            
+            # 确定方向并构建明确的比例描述
+            if ":" in ratio_value:
+                width_ratio, height_ratio = map(int, ratio_value.split(":"))
+                if width_ratio > height_ratio:
+                    orientation = "landscape (horizontal) image"
+                    ratio_desc = f"with width:height ratio of {ratio_value}"
+                elif width_ratio < height_ratio:
+                    orientation = "portrait (vertical) image"
+                    ratio_desc = f"with width:height ratio of {ratio_value}"
+                else:
+                    orientation = "square image"
+                    ratio_desc = f"with 1:1 aspect ratio"
             else:
-                orientation = "square"
-
-            simple_prompt = f"Create a detailed image of: {prompt}. Generate the image in {orientation} orientation with exact dimensions of {width}x{height} pixels. Ensure the composition fits properly within these dimensions without stretching or distortion."
+                orientation = "landscape (horizontal) image"  # 默认值
+                ratio_desc = "with standard aspect ratio"
+            
+            # 构建提示，更明确地指定宽高关系
+            simple_prompt = f"Create a detailed image of: {prompt}. Generate the image as a {orientation} {ratio_desc}. Ensure the composition fits properly within this aspect ratio without stretching or distortion."
             
             # 配置生成参数，使用用户指定的温度值
             gen_config = types.GenerateContentConfig(
@@ -265,7 +282,7 @@ class GeminiImageGenerator:
                 self.log("API响应中没有candidates")
                 # 合并日志和返回值
                 full_text = "\n".join(self.log_messages) + "\n\nAPI返回了空响应"
-                return (self.generate_empty_image(width, height), full_text)
+                return (self.generate_empty_image(512, 512), full_text)
             
             # 检查响应中是否有图像
             image_found = False
@@ -315,14 +332,13 @@ class GeminiImageGenerator:
                             if pil_image.mode != 'RGB':
                                 pil_image = pil_image.convert('RGB')
                             
-                            # 调整大小
-                            if pil_image.width != width or pil_image.height != height:
-                                pil_image = pil_image.resize((width, height), Image.Resampling.LANCZOS)
-                            
+                            # 不再调整大小，直接使用API返回的尺寸
+                            # 删除之前的尺寸调整代码块
+
                             # 转换为ComfyUI格式
                             img_array = np.array(pil_image).astype(np.float32) / 255.0
                             img_tensor = torch.from_numpy(img_array).unsqueeze(0)
-                            
+
                             self.log(f"图像转换为张量成功, 形状: {img_tensor.shape}")
                             
                             # 合并日志和API返回文本
@@ -332,7 +348,7 @@ class GeminiImageGenerator:
                         except Exception as e:
                             self.log(f"使用BytesIO打开图像失败: {str(e)}")
                             self.log("无法处理图像数据，使用默认空白图像")
-                            img_tensor = self.generate_empty_image(width, height)
+                            img_tensor = self.generate_empty_image(512, 512)
                     except Exception as e:
                         self.log(f"图像处理错误: {e}")
                         traceback.print_exc()  # 添加详细的错误追踪信息
@@ -345,7 +361,7 @@ class GeminiImageGenerator:
             
             # 合并日志和API返回文本
             full_text = "## 处理日志\n" + "\n".join(self.log_messages) + "\n\n## API返回\n" + response_text
-            return (self.generate_empty_image(width, height), full_text)
+            return (self.generate_empty_image(512, 512), full_text)
         
         except Exception as e:
             error_message = f"处理过程中出错: {str(e)}"
@@ -353,7 +369,7 @@ class GeminiImageGenerator:
             
             # 合并日志和错误信息
             full_text = "## 处理日志\n" + "\n".join(self.log_messages) + "\n\n## 错误\n" + error_message
-            return (self.generate_empty_image(width, height), full_text)
+            return (self.generate_empty_image(512, 512), full_text)
 
 # 注册节点
 NODE_CLASS_MAPPINGS = {
