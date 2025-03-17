@@ -20,14 +20,10 @@ class GeminiImageGenerator:
                 "api_key": ("STRING", {"default": "", "multiline": False}),
                 "model": (["models/gemini-2.0-flash-exp"], {"default": "models/gemini-2.0-flash-exp"}),
                 "aspect_ratio": ([
-                    "16:9",
-                    "9:16",
-                    "4:3",
-                    "3:4",
-                    "1:1",
-                    "3:2",
-                    "2:3",
-                ], {"default": "1:1"}),
+                    "Landscape (横屏)",
+                    "Portrait (竖屏)",
+                    "Square (方形)",
+                ], {"default": "Square (方形)"}),
                 "temperature": ("FLOAT", {"default": 1, "min": 0.0, "max": 2.0, "step": 0.05}),
             },
             "optional": {
@@ -192,27 +188,16 @@ class GeminiImageGenerator:
             else:
                 self.log(f"使用指定的种子值: {seed}")
             
-            # 提取比例数值部分，去掉中文描述
-            ratio_value = aspect_ratio  # 现在选项就是纯数字比例，如"16:9"
+            # 直接从选择确定方向
+            if "Landscape" in aspect_ratio:
+                orientation = "landscape (wide/horizontal) image"
+            elif "Portrait" in aspect_ratio:
+                orientation = "portrait (tall/vertical) image"
+            else:  # Square
+                orientation = "square image with equal width and height"
             
-            # 确定方向并构建明确的比例描述
-            if ":" in ratio_value:
-                width_ratio, height_ratio = map(int, ratio_value.split(":"))
-                if width_ratio > height_ratio:
-                    orientation = "landscape (horizontal) image"
-                    ratio_desc = f"with width:height ratio of {ratio_value}"
-                elif width_ratio < height_ratio:
-                    orientation = "portrait (vertical) image"
-                    ratio_desc = f"with width:height ratio of {ratio_value}"
-                else:
-                    orientation = "square image"
-                    ratio_desc = f"with 1:1 aspect ratio"
-            else:
-                orientation = "landscape (horizontal) image"  # 默认值
-                ratio_desc = "with standard aspect ratio"
-            
-            # 构建提示，更明确地指定宽高关系
-            simple_prompt = f"Create a detailed image of: {prompt}. Generate the image as a {orientation} {ratio_desc}. Ensure the composition fits properly within this aspect ratio without stretching or distortion."
+            # 构建提示，更简单更直接
+            simple_prompt = f"Create a detailed image of: {prompt}. Generate the image as a {orientation}. Ensure the composition fits properly within this format without stretching or distortion."
             
             # 配置生成参数，使用用户指定的温度值
             gen_config = types.GenerateContentConfig(
