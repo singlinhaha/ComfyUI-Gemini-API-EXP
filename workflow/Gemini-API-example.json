@@ -1,0 +1,223 @@
+{
+  "last_node_id": 57,
+  "last_link_id": 72,
+  "nodes": [
+    {
+      "id": 55,
+      "type": "PreviewImage",
+      "pos": [
+        2810.012939453125,
+        1266.0321044921875
+      ],
+      "size": [
+        276,
+        336
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "label": "图像",
+          "type": "IMAGE",
+          "link": 70
+        }
+      ],
+      "outputs": [],
+      "title": "黑色的头发",
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.24",
+        "Node name for S&R": "PreviewImage"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 49,
+      "type": "ShowText|pysssss",
+      "pos": [
+        2822.786376953125,
+        1723.91357421875
+      ],
+      "size": [
+        372,
+        324
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "text",
+          "label": "文本",
+          "type": "STRING",
+          "widget": {
+            "name": "text"
+          },
+          "link": 71
+        }
+      ],
+      "outputs": [
+        {
+          "name": "STRING",
+          "label": "字符串",
+          "type": "STRING",
+          "shape": 6,
+          "links": null
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfyui-custom-scripts",
+        "ver": "bbda5e52ad580c13ceaa53136d9c2bed9137bd2e",
+        "Node name for S&R": "ShowText|pysssss"
+      },
+      "widgets_values": [
+        "",
+        "## 错误\n错误: 未提供有效的API密钥。请在节点中输入API密钥或确保已保存密钥。\n\n## 使用说明\n1. 在节点中输入您的Google API密钥\n2. 密钥将自动保存到节点目录，下次可以不必输入"
+      ]
+    },
+    {
+      "id": 56,
+      "type": "Google-Gemini",
+      "pos": [
+        2242.48291015625,
+        1316.11962890625
+      ],
+      "size": [
+        433.8843078613281,
+        465.57025146484375
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "shape": 7,
+          "link": 72
+        }
+      ],
+      "outputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "links": [
+            70
+          ],
+          "slot_index": 0
+        },
+        {
+          "name": "API Respond",
+          "type": "STRING",
+          "links": [
+            71
+          ],
+          "slot_index": 1
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "Google-Gemini",
+        "cnr_id": "gemini-api",
+        "ver": "dade8c1c7b6ea4de7e482e1da79c6db800c850b8"
+      },
+      "widgets_values": [
+        "",
+        "帮我生成一个小猫的图片",
+        "",
+        "models/gemini-2.0-flash-exp",
+        true,
+        1024,
+        1024,
+        1,
+        934629060,
+        "randomize"
+      ]
+    },
+    {
+      "id": 57,
+      "type": "LoadImage",
+      "pos": [
+        1746.197509765625,
+        1321.0452880859375
+      ],
+      "size": [
+        315,
+        314
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            72
+          ]
+        },
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "links": null
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.26",
+        "Node name for S&R": "LoadImage"
+      },
+      "widgets_values": [
+        "0a54fbf9fc0fa917faf5625e54be1f1f.jpg",
+        "image"
+      ]
+    }
+  ],
+  "links": [
+    [
+      70,
+      56,
+      0,
+      55,
+      0,
+      "IMAGE"
+    ],
+    [
+      71,
+      56,
+      1,
+      49,
+      0,
+      "STRING"
+    ],
+    [
+      72,
+      57,
+      0,
+      56,
+      0,
+      "IMAGE"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 0.9090909090909091,
+      "offset": [
+        -1389.796768817685,
+        -999.8452287215426
+      ]
+    },
+    "workspace_info": {
+      "id": "hEuRrom_DkiLaNlzMsgJy",
+      "saveLock": false,
+      "cloudID": null,
+      "coverMediaPath": null
+    },
+    "ue_links": []
+  },
+  "version": 0.4
+}
